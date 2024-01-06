@@ -1,5 +1,6 @@
 import time
 import serial
+import threading
 
 cmdSym = b'\xfe'
 class cmds():
@@ -16,6 +17,7 @@ usbAddr = '/dev/ttyUSB0'
 baudRate = 9600
 class lcdDisplay():
     def init(self):
+        self.lock = threading.Lock()
         #open serial communication
         self.serialport = serial.Serial(usbAddr, baudRate, timeout=1)
 
@@ -33,11 +35,14 @@ class lcdDisplay():
 
     def write(self, string, line=1, pos=0):
         if line==1:
-            posCmd = bytes([cmds.l1pos + pos])
+            cmdLine = cmds.l1pos
         else:
-            posCmd = bytes([cmds.l2pos + pos])
-        self.serialport.write(cmdSym + posCmd)  #set the cursoe position
+            cmdLine = cmds.l2pos
+        posCmd = bytes([cmdLine + pos])
+        self.lock.acquire()  #ensure thread safety.  Can also specify "blocking" or "timeout"
+        self.serialport.write(cmdSym + posCmd)  #set the cursor position
         self.serialport.write(string.encode())  #the encode ensures it is UTF-8 (bytes)
+        self.lock.release()
 
     def __exit__(self):
         #close connection
