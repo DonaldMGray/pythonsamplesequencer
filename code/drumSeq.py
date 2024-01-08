@@ -11,6 +11,7 @@ import re
 import logging
 import argparse
 import json
+import pickle
 import copy  #deep object copy
 import lcdDisplay  #dmg - display module control
 #from collections import namedtuple
@@ -27,8 +28,8 @@ PRINT_TIME = False
 """
 This is a drum sequence generator.
 
-A 'sequence' consists of recorded notes in time.  A sequence has a length numMeasures * beatsPerMeasure * subBeats
-Sequences can be saved and reloaded (to local mem).  Eventually, they can be saved/loaded from files.
+A 'sequence' consists of recorded notes in time.  A sequence has a length numMeasures * numBeats * numSubBeats
+Sequences can be stored and reloaded (to local mem).  Can also be saved to file and loaded in via cmd line arg
 The “current Sequence” is the one currently being edited.
 The starting current Sequence is empty
 
@@ -102,74 +103,41 @@ class ThreadedMidi(threading.Thread):
 
 class SeqTime():
     """
-    Holds time signature elements - beatsPerMinute, beatsPerMeasure, divisions per beat
+    Holds time signature elements - beatsPerMinute, numBeats, divisions per beat
 
     "isTock" is introduced to double the sampling rate (2x faster than the subbeat rate)
     This is important for capturing input - we want 2x sampling so we can "round" the capture time to be 
     closest to the right time point
     """
-    def __init__(self, args):
-        DEFAULT_BPM = 120
-        DEFAULT_MEAS = 4
-        DEFAULT_BEATSPERMEAS = 4
-        DEFAULT_SUBBEATS = 2
-        if args['bpm'] is not None:
-            self.beatsPerMinute=int(args['bpm'])
-        else:
-            self.beatsPerMinute=DEFAULT_BPM
-        if args['meas'] is not None:
-            self.numMeasures=int(args['meas'])
-        else:
-            self.numMeasures=DEFAULT_MEAS
-        if args['beatsPerMeas'] is not None:
-            self.beatsPerMeasure=int(args['beatsPerMeas'])
-        else:
-            self.beatsPerMeasure=DEFAULT_BEATSPERMEAS
-        if args['subBeats'] is not None:
-            self.subBeats=int(args['subBeats'])
-        else:
-            self.subBeats = DEFAULT_SUBBEATS
+    def __init__(self, seq):
+        self.seq = seq
+        self.timeSig = seq.sequence['timeSig']
         self.clearTime()
-        self.numTicks = self.numMeasures * self.beatsPerMeasure * self.subBeats
 
     def clearTime(self):
         """ reset time clock """
-        self.measure = self.numMeasures-1
-        self.beat = self.beatsPerMeasure-1
-        self.subBeat = self.subBeats-1
+        self.measure = self.timeSig['numMeasures']-1
+        self.beat = self.timeSig['numBeats']-1
+        self.subBeat = self.timeSig['numSubBeats']-1
         self.isTock = True #isTock is true for the second half of the interval
-
-    @property
-    def beatsPerMinute(self):
-        return self._beatsPerMinute
-    @beatsPerMinute.setter
-    def beatsPerMinute(self, value):
-        if value < 10:
-            value = 10
-        self._beatsPerMinute = value
 
     def advanceTime(self):
         self.isTock = not self.isTock
         if not self.isTock:
-            self.subBeat = (self.subBeat + 1) % self.subBeats
+            self.subBeat = (self.subBeat + 1) % self.timeSig['numSubBeats']
             if self.subBeat == 0:
-                self.beat = (self.beat + 1) % self.beatsPerMeasure
+                self.beat = (self.beat + 1) % self.timeSig['numBeats']
                 if self.beat == 0:
-                    self.measure = (self.measure + 1) % self.numMeasures
+                    self.measure = (self.measure + 1) % self.timeSig['numMeasures']
 
     def printTime(self):
         print(self.measure+1, "-", self.beat+1, ":", self.subBeat+1, "  T:", self.tick)
         #logging.info('%s-%s:%s T:%s', self.measure+1, self.beat+1, self.subBeat+1, self.tick)
 
     @property
-    def interval(self):
-        """ time interval """
-        return 60 / self.beatsPerMinute / self.subBeats / 2  #the 2 is because of "isTock"
-
-    @property
     def tick(self):
-       return (  self.measure*self.beatsPerMeasure*self.subBeats
-                + self.beat*self.subBeats
+       return (  self.measure*self.timeSig['numBeats']*self.timeSig['numSubBeats']
+                + self.beat*self.timeSig['numSubBeats']
                 + self.subBeat)
 
     @property
@@ -178,58 +146,101 @@ class SeqTime():
         if not self.isTock:
             return self.tick
         else:
-            return (self.tick + 1) % self.numTicks
+            return (self.tick + 1) % self.seq.numTicks
 
 
+DEFAULT_BPM = 120
+DEFAULT_NUMMEAS = 4
+DEFAULT_NUMBEATSPERMEAS = 4
+DEFAULT_NUMSUBBEATS = 2
+numPoly = 6  #how many simultaneous voices
 class Sequence():
     """ 
     A polyphonic sequence - [ONLY ONE VOICE PER TICK SUPPORTED CURRENTLY!!]
     Polyphonic uses the multiple channels of the mixer (8 total, one used by metronome)
     Note however that if two notes happen to be using the same channel and the first note is a long duration, it will get interrupted by the next note on that same channel
     """
-    numPoly = 6  #how many simultaneous voices
+
+    def __init__(self, timeSigArgs):
+        self.timeSig = self.TimeSig(timeSigArgs).timeSig
+        self.sequence = self.newSequence(self.timeSig)
+        self._addedNotes = list()  #list of ticks where notes have been added to sequence (allows deleting in LIFO order)
+        #self.boundSample = False  #TODO - if True, then save the sample used with the note.  ?use hasAttr to see if sample is stored?
+        #self.clear()
+
+    class TimeSig:
+        def __init__ (self, timeSigArgs):
+            self.timeSig = dict()
+            if timeSigArgs['numMeasures'] is not None:
+                self.timeSig['numMeasures']=int(timeSigArgs['numMeasures'])
+            else:
+                self.timeSig['numMeasures']==DEFAULT_NUMMEAS
+            if timeSigArgs['numBeats'] is not None:
+                self.timeSig['numBeats']=int(timeSigArgs['numBeats'])
+            else:
+                self.timeSig['numBeats']==DEFAULT_NUMBEATSPERMEAS
+            if timeSigArgs['numSubBeats'] is not None:
+                self.timeSig['numSubBeats']=int(timeSigArgs['numSubBeats'])
+            else:
+                self.timeSig['numSubBeats']= DEFAULT_NUMSUBBEATS
+
+    def newSequence(self, timeSig):
+        seq = {
+                "timeSig" : timeSig,
+                "noteList" : [list() for x in range(self.numTicks)]
+                }
+
+        timeSig = seq['timeSig']
+
+        return seq
+
+    @property
+    def numTicks(self):
+        return self.timeSig['numMeasures'] * self.timeSig['numBeats'] * self.timeSig['numSubBeats']
 
     def clear(self):
-        self.seqList = [list() for x in range(self.numTicks)]
+        self.sequence['noteList'] = [list() for x in range(self.numTicks)]
         self._addedNotes = list()  #list of ticks where notes have been added to sequence (allows deleting in LIFO order)
-
-    def __init__(self, numTicks):
-        self.numTicks = numTicks
-        self.boundSample = False  #TODO - if True, then save the sample used with the note.  ?use hasAttr to see if sample is stored?
-        self.clear()
 
     @property
     def seqModified(self):
         return len(self._addedNotes) != 0
 
     def addNote(self, tick, note):
-        if len(self.seqList[tick]) >= Sequence.numPoly:
+        noteList = self.sequence['noteList']
+        if len(noteList[tick]) >= numPoly:
             logging.debug("Overflowed poly on tick: %s", tick)
-            del self.seqList[tick][0]
+            del noteList[tick][0]
         self._addedNotes.append(tick)
-        self.seqList[tick].append(note) 
+        noteList[tick].append(note) 
         logging.debug('added: %s at: %s', note, tick)
 
     def delNote(self):
         #delete last note (remember to delete from _addedNotes)
         if len(self._addedNotes) == 0: return #no added notes to delete
         noteTick = self._addedNotes.pop()
-        self.seqList[noteTick].pop()  #pop the last from _addedNotes; use that to index the tick, then pop from the voice list
+        self.sequence['noteList'][noteTick].pop()  #pop the last from _addedNotes; use that to index the tick, then pop from the voice list
         logging.debug('deleted from tick: %s', noteTick)
 
-    def storeSeq(self):
-        fileName = "../storedSequences/sequence" + datetime.datetime.now().strftime("%Y_%m_%d__%H_%M") + ".json"
-        logging.info("Storing file: " + fileName)
-        with open (fileName, mode="w") as file:
-            json.dump(self.seqList, file, indent=4)
+    def saveSequence(self):
+        fileName = "../savedSequences/sequence" + datetime.datetime.now().strftime("%Y_%m_%d__%H_%M") + ".json"
+        logging.info("Saving sequence file: " + fileName)
+        with open (fileName, mode="w") as jsonFile:
+            json.dump(self.sequence, jsonFile, indent=4)
         os.chmod(fileName, 0o666)  #give write permission to all
-        #print (json.dumps(self.seqList, indent=4) )    #print the string out
+        print (json.dumps(self.sequence, indent=4) )    #print the string out
+
+    def loadSequence(self, fileName):
+        logging.info("Loading sequence file: " + fileName)
+        with open (fileName, mode="r") as jsonFile:
+            seq=json.load(jsonFile)
+        self.sequence['timeSig']=seq['timeSig']
+        self.sequence['noteList']=seq['noteList']
+        print ("loaded sequence from: {0}\n {1} {2}".format(fileName, seq['timeSig'], seq['noteList']) )
 
 
-    def loadSeq(self):
-        print ("not implemented")
-
-
+#Mixer channel allocation
+#[0:5] are for 6 poly voices 
 chanUserInput = 6   #for "live" note input
 chanMetro = 7   #which mixer channel to use for metronome
 
@@ -239,24 +250,28 @@ class SequenceMgr():
     Responds to user events from keypad (not midi pad)
     """
     #This class is effectively a singleton, so not sure the "self._myvar" usage is needed.  Good hygene?
-    def __init__(self, argDict):
+    def __init__(self, timeArgDict):
         self._timer = None
         self.is_running = False
         self.metroOn = True
-        self.seqTime = SeqTime(argDict)  #lazy to just pass all the args, but it can pick them out
-        self.currSeq = Sequence(self.seqTime.numTicks)
+        if timeArgDict['bpm'] is not None:
+            self.beatsPerMinute=int(timeArgDict['bpm'])
+        else:
+            self.beatsPerMinute=DEFAULT_BPM
+        self.currSeq = Sequence(timeArgDict)
         self.currSeqNum = 0
         self.recording = False
-        self.seqList = [Sequence(self.seqTime.numTicks)] * 10   #pre-init list of sequences
+        self.seqList = [Sequence(timeArgDict)] * 10   #pre-init list of sequences in mem
+        #self.seqList = [None] * 10   #pre-init list of sequences in mem
 
     def start(self):
         """ sequence start/stop & callback handling """
         if not self.is_running:
             self.is_running = True
             self.next_call = time.time()
-            self.seqTime.clearTime() #restart the time sequence
+            #self.seqTime.clearTime() #restart the time sequence
         else:
-            self.next_call += self.seqTime.interval
+            self.next_call += self.interval
         self._timer = threading.Timer(self.next_call - time.time(), self._run)
         self._timer.start()
 
@@ -268,8 +283,30 @@ class SequenceMgr():
         self.start() #set next timer trigger
         self.advanceSequence() #run the sequencer
 
+    @property 
+    def currSeq(self):
+        return self._currSeq
+    @currSeq.setter
+    def currSeq(self, value):
+        self._currSeq = value
+        self.seqTime = SeqTime(self.currSeq)
+
+    @property
+    def beatsPerMinute(self):
+        return self._beatsPerMinute
+    @beatsPerMinute.setter
+    def beatsPerMinute(self, value):
+        if value < 10:
+            value = 10
+        self._beatsPerMinute = value
+
+    @property
+    def interval(self):
+        """ time interval """
+        return 60 / self.beatsPerMinute / self.seqTime.timeSig['numSubBeats'] / 2  #the 2 is because of "isTock"
+
     def updateDisplay(self):
-        display.updateSettings(self.seqTime.beatsPerMinute, sampMgr.currSampleDir, self.currSeqNum, self.recording)
+        display.updateSettings(self.beatsPerMinute, sampMgr.currSampleDir, self.currSeqNum, self.recording)
 
     def advanceSequence(self):
         #bump the time - do this first so that everything is lined up to the new tick
@@ -298,7 +335,8 @@ class SequenceMgr():
                     pygame.mixer.Channel(chanMetro).play(metroSamp);
 
             #Now play all the notes in this tick
-            seqTickNotes = self.currSeq.seqList[self.seqTime.tick]
+            seqNoteList = self.currSeq.sequence['noteList']
+            seqTickNotes = seqNoteList[self.seqTime.tick]
             if len(seqTickNotes) != 0:
                 self.mixChan=0
                 if True:    #enable poly
@@ -313,7 +351,11 @@ class SequenceMgr():
         Handle midi note pressed
         If recording, add to the current sequence
         """
-        self.playMidiNote(note,chanUserInput)  #Poly allowed for chans [0:5], metronome is chan 7
+        if self.recording and self.seqTime.isTock:  #avoid the double play that happens if we enter a note in the Tock while recording (because the recording will play it the 2nd time)
+            #can be a bit disconcerting with really slow tempo, but I think is better experience
+            pass
+        else:
+            self.playMidiNote(note,chanUserInput)  #Poly allowed for chans [0:5], metronome is chan 7
         #add note to sequence
         if self.recording:
             noteTick = self.seqTime.roundedTick
@@ -334,13 +376,15 @@ class SequenceMgr():
         pygame.mixer.Channel(chan).play(sampleSet.sampleSounds[sampNum])
 
     def handleCtl(self, ctlEvent):  #control events from number pad
+        #The modStar and modSlash mechanisms only work if the mod is pressed first.
+        #Would be nicer to allow any order
         logging.debug("got control event:%s", ctlEvent)
         keyType = ctlEvent['keyType']
         modStar = ctlEvent['modStar']
         modSlash = ctlEvent['modSlash']
         keyVal = ctlEvent['keyVal']
 
-        #beatsPerMinute rate adjust - [*-]+/-
+        #beatsPerMinute rate adjust - [*/]+/-
         if keyType == KeyTypes.plus:
             bpmChange = 5
         if keyType == KeyTypes.minus:
@@ -350,8 +394,8 @@ class SequenceMgr():
                 bpmChange *= 2
             if modSlash:
                 bpmChange /= 5
-            self.seqTime.beatsPerMinute += bpmChange
-            logging.debug("Beats per minute: %s", self.seqTime.beatsPerMinute)
+            self.beatsPerMinute += bpmChange
+            logging.debug("Beats per minute: %s", self.beatsPerMinute)
             self.updateDisplay()
 
         #metronome on/off - .
@@ -364,12 +408,11 @@ class SequenceMgr():
             if not modStar: #Start/stop sequence
                 if self.is_running:
                     self.stop()
-                    #self.currSeq.clear()
                 else:
                     self.start()
                 logging.info("Sequence running: %s", self.is_running)
             else:   #store sequence to file
-                self.currSeq.storeSeq()
+                self.currSeq.saveSequence()
 
         #BkSpc
         if keyType == KeyTypes.backspace:
@@ -378,7 +421,7 @@ class SequenceMgr():
                 self.currSeq.delNote()
             else:
                 logging.info("clear current sequence")
-                self.currSeq = Sequence(self.seqTime.numTicks)
+                self.currSeq.clear()
 
         #recording on/off - NumLk
         if keyType == KeyTypes.numlock_on:
@@ -390,24 +433,26 @@ class SequenceMgr():
             self.recording = False
             self.updateDisplay()
         
-        #load/save seq - 0-9
+        #store/restore seq or change sample - 0-9
         if keyType == KeyTypes.num: 
-            logging.info("num: %s", keyVal)
+            #logging.info("num: %s", keyVal)
             if modSlash:    #load sample
                 if keyVal > len(sampMgr.sampleDirs):
                     logging.info("Attempted to load sample: %s but does not exist", keyVal)
                 else:
-                    logging.info("Loading sample: %s", sampMgr.sampleDirs[keyVal-1])
-                    sampMgr.currSampleDir = keyVal-1
+                    logging.info("Loading sample: %s", sampMgr.sampleDirs[keyVal])
+                    sampMgr.currSampleDir = keyVal
                     self.updateDisplay()
-            elif modStar:   #save currSeq to mem
-                logging.info("Saving to seqbank: %s", keyVal)
-                self.seqList[keyVal] = copy.copy(self.currSeq)
+            elif modStar:   #store currSeq to mem
+                logging.info("Store to seqbank: %s", keyVal)
+                self.seqList[keyVal] = copy.deepcopy(self.currSeq)
+                print (self.seqList[keyVal].sequence['noteList'])
             else:   #load currSeq from mem
                 logging.info("Loading seq from seqbank: %s", keyVal)
-                self.currSeq = copy.copy(self.seqList[keyVal])
+                self.currSeq = copy.deepcopy(self.seqList[keyVal])
                 self.currSeqNum = keyVal
                 self.updateDisplay()
+                print (self.seqList[keyVal].sequence['noteList'])
 
 topSampleDir = '../samples/'
 metroDir = topSampleDir + 'ZZ_Metronome/'
@@ -440,7 +485,7 @@ class SampleMgr():
     Load and manage lists of samples
     """
     def __init__(self):
-        self.currSampleDir = 1
+        self.currSampleDir = 2
         self.sampleSets = list()
 
     def findSamples(self):
@@ -529,7 +574,8 @@ class KeyEventHandler():
 
 #rcdChar = "*"
 #rcdChar = "\u00AE" #this is the (r) sign, but won't display correctly on LCD
-rcdChar = "(r"
+#rcdChar = '\xF5'    #music note (extended ASCII) but doesn't work on LCD
+rcdChar = "-R"
 
 from serial import SerialException
 class Display():
@@ -565,19 +611,23 @@ class Display():
         self._lcd.write(str(seqNum),2,4)
         self._lcd.write(str(sampSet),2,12)
 
-
+savedSequenceDir = '../savedSequences/'
 def main(args):
     #create the main objects
     global seqMgr, sampMgr, display #need to explicitly called out as global here because we are assigning them
     pySetup = PygameSetup()
     display = Display()
-    #build a dict for the SeqTime args
+    #build a dict for the timeSig args
     argDict = vars(args)
     print ("args: ", argDict)
-    subDict = dict( (k, argDict[k]) for k in ('bpm', 'meas', 'beatsPerMeas', 'subBeats') )
+    timeSigArgs = dict( (k, argDict[k]) for k in ('bpm', 'numMeasures', 'numBeats', 'numSubBeats') )
     sampMgr = SampleMgr()
-    seqMgr = SequenceMgr(subDict)  #creates SeqTime, etc... Only pass relevant args 
+    seqMgr = SequenceMgr(timeSigArgs)  #creates SeqTime, etc... Only pass relevant args 
     midi = ThreadedMidi()   #this kicks off the midi event handler
+
+    if 'loadSeq' in argDict:
+        fileName = savedSequenceDir + argDict['loadSeq']
+        seqMgr.currSeq.loadSequence(fileName)
 
     #init everything
     pySetup.initPygame()
@@ -607,16 +657,12 @@ if __name__ == "__main__":
 
     #more powerful is to use argparse ==>
     parser = argparse.ArgumentParser(description="Interactive sample sequencer")
-    parser.add_argument("--meas", type=int, help="# measures in sequence")
-    parser.add_argument("--bpm",  type=int, help="Beats per Minute")
-    parser.add_argument("--beatsPerMeas",  type=int, help="Beats per Measure")
-    parser.add_argument("--subBeats",  type=int, help="# Subbeats within beats")
+    parser.add_argument("--numMeasures", type=int, help="# measures in sequence")
+    parser.add_argument("--bpm",  type=int, help="# Beats per Minute")
+    parser.add_argument("--numBeats",  type=int, help="# Beats per Measure")
+    parser.add_argument("--numSubBeats",  type=int, help="# Subbeats within beats")
     parser.add_argument("--loadSeq", help="load a json encoded sequence file from storedSequences")
     args = parser.parse_args()
 
     main(args)
-
-
-
-
 
