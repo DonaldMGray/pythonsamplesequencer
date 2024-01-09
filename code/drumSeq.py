@@ -161,12 +161,21 @@ class Sequence():
     Note however that if two notes happen to be using the same channel and the first note is a long duration, it will get interrupted by the next note on that same channel
     """
 
-    def __init__(self, timeSigArgs):
-        self.timeSig = self.TimeSig(timeSigArgs).timeSig
-        self.sequence = self.newSequence(self.timeSig)
-        self._addedNotes = list()  #list of ticks where notes have been added to sequence (allows deleting in LIFO order)
-        #self.boundSample = False  #TODO - if True, then save the sample used with the note.  ?use hasAttr to see if sample is stored?
-        #self.clear()
+    def __init__(self, arg):
+        if isinstance(arg, dict):   #must be dictionary of timeSig
+            self.timeSig = self.TimeSig(arg).timeSig
+            self.sequence = self.newSequence(self.timeSig)
+            self._addedNotes = list()  #list of ticks where notes have been added to sequence (allows deleting in LIFO order)
+        elif isinstance(arg, str):  #must be a filename to load
+            with open (arg, mode="r") as jsonFile:
+                seq=json.load(jsonFile)
+            self.timeSig = seq['timeSig']
+            self.sequence = self.newSequence(self.timeSig)
+            self.sequence['noteList']=seq['noteList']
+            self._addedNotes = list()  #list of ticks where notes have been added to sequence (allows deleting in LIFO order)
+            print ("loaded sequence from: {0}\n {1} {2}".format(arg, seq['timeSig'], seq['noteList']) )
+        else:
+            raise TypeError('Type: {0} not supported'.format(type(arg)))
 
     class TimeSig:
         def __init__ (self, timeSigArgs):
@@ -222,7 +231,7 @@ class Sequence():
         self.sequence['noteList'][noteTick].pop()  #pop the last from _addedNotes; use that to index the tick, then pop from the voice list
         logging.debug('deleted from tick: %s', noteTick)
 
-    def saveSequence(self):
+    def saveSequence(self): #save seq to file via json (restore is by creating Sequence(fileName) )
         fileName = "../savedSequences/sequence" + datetime.datetime.now().strftime("%Y_%m_%d__%H_%M") + ".json"
         logging.info("Saving sequence file: " + fileName)
         with open (fileName, mode="w") as jsonFile:
@@ -230,13 +239,6 @@ class Sequence():
         os.chmod(fileName, 0o666)  #give write permission to all
         print (json.dumps(self.sequence, indent=4) )    #print the string out
 
-    def loadSequence(self, fileName):
-        logging.info("Loading sequence file: " + fileName)
-        with open (fileName, mode="r") as jsonFile:
-            seq=json.load(jsonFile)
-        self.sequence['timeSig']=seq['timeSig']
-        self.sequence['noteList']=seq['noteList']
-        print ("loaded sequence from: {0}\n {1} {2}".format(fileName, seq['timeSig'], seq['noteList']) )
 
 
 #Mixer channel allocation
@@ -261,8 +263,8 @@ class SequenceMgr():
         self.currSeq = Sequence(timeArgDict)
         self.currSeqNum = 0
         self.recording = False
-        self.seqList = [Sequence(timeArgDict)] * 10   #pre-init list of sequences in mem
-        #self.seqList = [None] * 10   #pre-init list of sequences in mem
+        #self.seqList = [Sequence(timeArgDict)] * 10   #pre-init list of sequences in mem
+        self.seqList = [None] * 10   #pre-init list of sequences in mem
 
     def start(self):
         """ sequence start/stop & callback handling """
@@ -336,15 +338,19 @@ class SequenceMgr():
 
             #Now play all the notes in this tick
             seqNoteList = self.currSeq.sequence['noteList']
-            seqTickNotes = seqNoteList[self.seqTime.tick]
-            if len(seqTickNotes) != 0:
-                self.mixChan=0
-                if True:    #enable poly
-                    for note in seqTickNotes:
-                        self.playMidiNote(note, self.mixChan)
-                        self.mixChan += 1
-                else:  #no poly
-                    self.playMidiNote(seqTickNotes[0],0) 
+            try:
+                seqTickNotes = seqNoteList[self.seqTime.tick]
+                if len(seqTickNotes) != 0:
+                    self.mixChan=0
+                    if True:    #enable poly
+                        for note in seqTickNotes:
+                            self.playMidiNote(note, self.mixChan)
+                            self.mixChan += 1
+                    else:  #no poly
+                        self.playMidiNote(seqTickNotes[0],0) 
+            except IndexError:
+                logging.error('Tick count is longer than sequence note list')
+
 
     def handleNoteIn(self,note):
         """
@@ -374,6 +380,16 @@ class SequenceMgr():
             return
         logging.debug('playing midi:%s sample#:%s %s', note, sampNum, sampleSet.sampleNames[sampNum])
         pygame.mixer.Channel(chan).play(sampleSet.sampleSounds[sampNum])
+
+    def storeSeq(self, slot):  #store a seq to mem
+        logging.info("Store to seqbank: %s", slot)
+        self.seqList[slot] = copy.deepcopy(self.currSeq)
+
+    def loadSeq(self, slot): #restore seq from mem
+        logging.info("Loading seq from seqbank: %s", slot)
+        self.currSeq = copy.deepcopy(self.seqList[slot])
+        self.currSeqNum = slot 
+        self.updateDisplay()
 
     def handleCtl(self, ctlEvent):  #control events from number pad
         #The modStar and modSlash mechanisms only work if the mod is pressed first.
@@ -433,7 +449,7 @@ class SequenceMgr():
             self.recording = False
             self.updateDisplay()
         
-        #store/restore seq or change sample - 0-9
+        #store/restore seq to/from mem or change sample - 0-9
         if keyType == KeyTypes.num: 
             #logging.info("num: %s", keyVal)
             if modSlash:    #load sample
@@ -444,15 +460,12 @@ class SequenceMgr():
                     sampMgr.currSampleDir = keyVal
                     self.updateDisplay()
             elif modStar:   #store currSeq to mem
-                logging.info("Store to seqbank: %s", keyVal)
-                self.seqList[keyVal] = copy.deepcopy(self.currSeq)
-                print (self.seqList[keyVal].sequence['noteList'])
+                self.storeSeq(keyVal)
             else:   #load currSeq from mem
-                logging.info("Loading seq from seqbank: %s", keyVal)
-                self.currSeq = copy.deepcopy(self.seqList[keyVal])
-                self.currSeqNum = keyVal
-                self.updateDisplay()
-                print (self.seqList[keyVal].sequence['noteList'])
+                if self.seqList[keyVal] is None:
+                    logging.info("No sequence stored at seqbank: %s", keyVal)
+                else:
+                    self.loadSeq(keyVal)
 
 topSampleDir = '../samples/'
 metroDir = topSampleDir + 'ZZ_Metronome/'
@@ -627,7 +640,9 @@ def main(args):
 
     if 'loadSeq' in argDict:
         fileName = savedSequenceDir + argDict['loadSeq']
-        seqMgr.currSeq.loadSequence(fileName)
+        logging.info("Loading sequence file: " + fileName)
+        seqMgr.currSeq=Sequence(fileName)
+        seqMgr.storeSeq(0)  #store into mem slot 0 
 
     #init everything
     pySetup.initPygame()
@@ -661,7 +676,7 @@ if __name__ == "__main__":
     parser.add_argument("--bpm",  type=int, help="# Beats per Minute")
     parser.add_argument("--numBeats",  type=int, help="# Beats per Measure")
     parser.add_argument("--numSubBeats",  type=int, help="# Subbeats within beats")
-    parser.add_argument("--loadSeq", help="load a json encoded sequence file from storedSequences")
+    parser.add_argument("--loadSeq", help="load a json encoded sequence file from storedSequences.  Will also store in mem slot 0")
     args = parser.parse_args()
 
     main(args)
