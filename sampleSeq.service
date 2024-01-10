@@ -10,9 +10,10 @@ Type=simple
 #Restart=always
 #Restart=on-failure
 Restart=no
+RestartSec=5
 
-ExecStart=/usr/bin/python3 sampleSeq.py
-#RuntimeDirectory=/home/pi/Projects/pythonsamplesequencer/code
+#enable by uncommenting ExecStart
+#ExecStart=/usr/bin/python3 sampleSeq.py
 WorkingDirectory=/home/pi/Projects/pythonsamplesequencer/code
 
 StandardOutput=append:/var/log/sampleSeq.log

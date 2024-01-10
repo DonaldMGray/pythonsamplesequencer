@@ -9,6 +9,7 @@ import os
 import sys
 import re
 import logging
+import signal
 import argparse
 import json
 import pickle
@@ -21,6 +22,9 @@ from enum import Enum, auto
 #LOG_LEVEL = logging.DEBUG
 LOG_LEVEL = logging.INFO
 PRINT_TIME = False
+
+#may help pygame??
+os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 #The following are global for easy access:
 #  seqMgr, sampMgr, display
@@ -65,7 +69,8 @@ class PygameSetup():
         # buffer size should be set low to ensure good timing; but too low can cause audio glitches
         # ~512 rcmd
         pygame.mixer.pre_init(frequency=22050, size=-16, channels=8, buffer=512)
-        pygame.init()
+        #pygame.init()  #don't init all of pygame as this gets us into issues with the display
+        pygame.mixer.init()
         #keyboard event handling - only looking for keyboard up/down (not mouse)
         pygame.display.set_mode()
         pygame.event.set_allowed(None)
@@ -624,9 +629,28 @@ class Display():
 
 savedSequenceDir = '../savedSequences/'
 def main(argDict):
+    #setup logging
+    logLevel = LOG_LEVEL #default as specified statically
+    if argDict['logLevel'] is not None:
+        if argDict['logLevel'] == 'debug':
+            logLevel = logging.DEBUG
+    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', datefmt='%I:%M:%S %p', level=logLevel)
+    print ("TESTING", file=sys.stderr)
+
+    #handle system signals (seems to be an issue when autostarting via systemd)
+    def handler(signum, frame):
+        logging.warning("Got a {} signal.  Ignoring".format(signum))
+    signal.signal(signal.SIGHUP, handler)   # signal 1
+    #signal.signal(signal.SIGTERM, handler) # signal 15
+    #signal.signal(signal.SIGCONT, handler) # signal 18
+
     #create the main objects
     global seqMgr, sampMgr, display #need to explicitly called out as global here because we are assigning them
-    pySetup = PygameSetup()
+    try:
+        pySetup = PygameSetup()
+    except Exception as ex:
+        logging.warning("Got exception: {}".format(ex))
+
     display = Display()
     timeSigArgs = dict( (k, argDict[k]) for k in ('bpm', 'numMeasures', 'numBeats', 'numSubBeats') )
 
@@ -680,14 +704,6 @@ if __name__ == "__main__":
     argDict = vars(args)
     print ("args: ", argDict)
 
-    #setup logging
-    logLevel = LOG_LEVEL #default as specified statically
-    if argDict['logLevel'] is not None:
-        if argDict['logLevel'] == 'debug':
-            logLevel = logging.DEBUG
-    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', datefmt='%I:%M:%S %p', level=logLevel)
-
-    print ("TESTING", file=sys.stderr)
 
     main(argDict)
 
