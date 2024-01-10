@@ -94,7 +94,7 @@ class ThreadedMidi(threading.Thread):
         midiPorts = mido.get_input_names()
         logging.debug("Midi ports: %s", midiPorts)
         if len(midiPorts) == 1:
-            logging.error("MIDI DEVICE NOT CONNECTED")
+            logging.warning("MIDI DEVICE NOT CONNECTED")
             exit()
         inport = mido.open_input(midiPorts[midiDevice])
         for msg in inport:
@@ -352,7 +352,7 @@ class SequenceMgr():
                     else:  #no poly
                         self.playMidiNote(seqTickNotes[0],0) 
             except IndexError:
-                logging.error('Tick count is longer than sequence note list')
+                logging.warning('Tick count is longer than sequence note list')
 
 
     def handleNoteIn(self,note):
@@ -457,7 +457,7 @@ class SequenceMgr():
             #logging.info("num: %s", keyVal)
             if modSlash:    #load sample
                 if keyVal > len(sampMgr.sampleDirs):
-                    logging.info("Attempted to load sample: %s but does not exist", keyVal)
+                    logging.warning("Attempted to load sample: %s but does not exist", keyVal)
                 else:
                     logging.info("Loading sample: %s", sampMgr.sampleDirs[keyVal])
                     sampMgr.currSampleDir = keyVal
@@ -466,7 +466,7 @@ class SequenceMgr():
                 self.storeSeq(keyVal)
             else:   #load currSeq from mem
                 if self.seqList[keyVal] is None:
-                    logging.info("No sequence stored at seqbank: %s", keyVal)
+                    logging.warning("No sequence stored at seqbank: %s", keyVal)
                 else:
                     self.loadSeq(keyVal)
 
@@ -601,7 +601,7 @@ class Display():
         try:
             self._lcd.init() #will fail if not plugged in
         except SerialException as e:
-            logging.info("Display LCD not found")
+            logging.warning("Display LCD not found")
             return
         self.enabled = True   #handle case where not plugged in
         time.sleep(3) #Need to give it time to boot?
