@@ -56,7 +56,6 @@ TODO
 --
 
 """
-logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', datefmt='%I:%M:%S %p', level=LOG_LEVEL)
 
 class PygameSetup():
     """
@@ -624,20 +623,11 @@ class Display():
         self._lcd.write(str(sampSet),2,12)
 
 savedSequenceDir = '../savedSequences/'
-def main(args):
+def main(argDict):
     #create the main objects
     global seqMgr, sampMgr, display #need to explicitly called out as global here because we are assigning them
     pySetup = PygameSetup()
     display = Display()
-    #build a dict for the timeSig args
-    argDict = vars(args)
-    print ("args: ", argDict)
-
-    if argDict['logLevel'] is not None:
-        if argDict['logLevel'] == 'debug':
-            LOG_LEVEL = logging.DEBUG
-            print("Logging at debug level")
-
     timeSigArgs = dict( (k, argDict[k]) for k in ('bpm', 'numMeasures', 'numBeats', 'numSubBeats') )
 
     sampMgr = SampleMgr()
@@ -675,7 +665,7 @@ def main(args):
 
 #autostart if called from cmd line "python3 _myname.py_"
 if __name__ == "__main__":
-    #simplistic sln is to build a dict from the cmd line args
+    #For arg handling, simplistic sln is to build a dict from the cmd line args
     #argDict = dict(arg.split('=') for arg in sys.argv[1:])  #don't include the executable name
 
     #more powerful is to use argparse ==>
@@ -687,8 +677,17 @@ if __name__ == "__main__":
     parser.add_argument("--loadSeq", help="load a json encoded sequence file from storedSequences.  Will also store in mem slot 0")
     parser.add_argument("--logLevel", help="Set the logging level")
     args = parser.parse_args()
+    argDict = vars(args)
+    print ("args: ", argDict)
+
+    #setup logging
+    logLevel = LOG_LEVEL #default as specified statically
+    if argDict['logLevel'] is not None:
+        if argDict['logLevel'] == 'debug':
+            logLevel = logging.DEBUG
+    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', datefmt='%I:%M:%S %p', level=logLevel)
 
     print ("TESTING", file=sys.stderr)
 
-    main(args)
+    main(argDict)
 
