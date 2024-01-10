@@ -1,0 +1,22 @@
+# Contents of /etc/systemd/system/sampSeq.service
+
+[Unit]
+Description=Sample Sequencer
+After=network.target
+
+
+[Service]
+Type=simple
+#Restart=always
+#Restart=on-failure
+Restart=no
+
+ExecStart=/usr/bin/python3 sampleSeq.py
+#RuntimeDirectory=/home/pi/Projects/pythonsamplesequencer/code
+WorkingDirectory=/home/pi/Projects/pythonsamplesequencer/code
+
+StandardOutput=append:/var/log/sampleSeq.log
+StandardError=append:/var/log/sampleSeq.log
+
+[Install]
+WantedBy=multi-user.target
