@@ -18,8 +18,8 @@ import lcdDisplay  #dmg - display module control
 from enum import Enum, auto
 
 #set logging level
-LOG_LEVEL = logging.DEBUG
-#LOG_LEVEL = logging.INFO
+#LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 PRINT_TIME = False
 
 #The following are global for easy access:
@@ -53,8 +53,7 @@ Mixer channels (8 total?):
     User played note:   chan 6
     Metronome:          chan 7
 TODO
-- Load/Save Sequence to file
-
+--
 
 """
 logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', datefmt='%I:%M:%S %p', level=LOG_LEVEL)
@@ -183,15 +182,15 @@ class Sequence():
             if timeSigArgs['numMeasures'] is not None:
                 self.timeSig['numMeasures']=int(timeSigArgs['numMeasures'])
             else:
-                self.timeSig['numMeasures']==DEFAULT_NUMMEAS
+                self.timeSig['numMeasures']=DEFAULT_NUMMEAS
             if timeSigArgs['numBeats'] is not None:
                 self.timeSig['numBeats']=int(timeSigArgs['numBeats'])
             else:
-                self.timeSig['numBeats']==DEFAULT_NUMBEATSPERMEAS
+                self.timeSig['numBeats']=DEFAULT_NUMBEATSPERMEAS
             if timeSigArgs['numSubBeats'] is not None:
                 self.timeSig['numSubBeats']=int(timeSigArgs['numSubBeats'])
             else:
-                self.timeSig['numSubBeats']= DEFAULT_NUMSUBBEATS
+                self.timeSig['numSubBeats']=DEFAULT_NUMSUBBEATS
 
     def newSequence(self, timeSig):
         seq = {
@@ -237,7 +236,7 @@ class Sequence():
         with open (fileName, mode="w") as jsonFile:
             json.dump(self.sequence, jsonFile, indent=4)
         os.chmod(fileName, 0o666)  #give write permission to all
-        print (json.dumps(self.sequence, indent=4) )    #print the string out
+        #print (json.dumps(self.sequence, indent=4) )    #print the string out
 
 
 
@@ -633,19 +632,28 @@ def main(args):
     #build a dict for the timeSig args
     argDict = vars(args)
     print ("args: ", argDict)
+
+    if argDict['logLevel'] is not None:
+        if argDict['logLevel'] == 'debug':
+            LOG_LEVEL = logging.DEBUG
+            print("Logging at debug level")
+
     timeSigArgs = dict( (k, argDict[k]) for k in ('bpm', 'numMeasures', 'numBeats', 'numSubBeats') )
+
     sampMgr = SampleMgr()
     seqMgr = SequenceMgr(timeSigArgs)  #creates SeqTime, etc... Only pass relevant args 
     midi = ThreadedMidi()   #this kicks off the midi event handler
 
-    if 'loadSeq' in argDict:
+    if argDict['loadSeq'] is not None:
         fileName = savedSequenceDir + argDict['loadSeq']
         logging.info("Loading sequence file: " + fileName)
         seqMgr.currSeq=Sequence(fileName)
         seqMgr.storeSeq(0)  #store into mem slot 0 
 
+    logging.info("About to start Pygame")
     #init everything
     pySetup.initPygame()
+    logging.info("After init of Pygame")
     sampMgr.findSamples()
     display.initDisplay()
     seqMgr.updateDisplay()
@@ -672,12 +680,15 @@ if __name__ == "__main__":
 
     #more powerful is to use argparse ==>
     parser = argparse.ArgumentParser(description="Interactive sample sequencer")
-    parser.add_argument("--numMeasures", type=int, help="# measures in sequence")
     parser.add_argument("--bpm",  type=int, help="# Beats per Minute")
+    parser.add_argument("--numMeasures", type=int, help="# measures in sequence")
     parser.add_argument("--numBeats",  type=int, help="# Beats per Measure")
     parser.add_argument("--numSubBeats",  type=int, help="# Subbeats within beats")
     parser.add_argument("--loadSeq", help="load a json encoded sequence file from storedSequences.  Will also store in mem slot 0")
+    parser.add_argument("--logLevel", help="Set the logging level")
     args = parser.parse_args()
+
+    print ("TESTING", file=sys.stderr)
 
     main(args)
 
