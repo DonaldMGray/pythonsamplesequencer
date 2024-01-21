@@ -658,11 +658,19 @@ def main(argDict):
     seqMgr = SequenceMgr(timeSigArgs)  #creates SeqTime, etc... Only pass relevant args 
     midi = ThreadedMidi()   #this kicks off the midi event handler
 
+    #load sequence file(s)
     if argDict['loadSeq'] is not None:
-        fileName = savedSequenceDir + argDict['loadSeq']
-        logging.info("Loading sequence file: " + fileName)
-        seqMgr.currSeq=Sequence(fileName)
-        seqMgr.storeSeq(0)  #store into mem slot 0 
+        fileArgs = argDict['loadSeq']
+        for fileArg in fileArgs: #loadSeq arg is a list (append option) because we want to allow multiple instances of it
+            if fileArg.find(',') is -1: #just specified a file
+                fileName = fileArg
+                slotNum = 0
+            else:   #specified a file and slot number to store it in
+                (fileName, slotNum) = fileArg.split(',')
+            fileName = savedSequenceDir + fileName
+            logging.info("Loading sequence file: " + fileName)
+            seqMgr.currSeq=Sequence(fileName)  #means the last one specified will be played
+            seqMgr.storeSeq(int(slotNum))  #store into mem slot  
 
     logging.info("About to start Pygame")
     #init everything
@@ -698,7 +706,7 @@ if __name__ == "__main__":
     parser.add_argument("--numMeasures", type=int, help="# measures in sequence")
     parser.add_argument("--numBeats",  type=int, help="# Beats per Measure")
     parser.add_argument("--numSubBeats",  type=int, help="# Subbeats within beats")
-    parser.add_argument("--loadSeq", help="load a json encoded sequence file from storedSequences.  Will also store in mem slot 0")
+    parser.add_argument("--loadSeq", action='append', help="load a json encoded sequence file from storedSequences. If only filename specified, will load into slot 0, can also specify slot vis --loadSeq=<fileName>,<slotNum>") 
     parser.add_argument("--logLevel", help="Set the logging level")
     args = parser.parse_args()
     argDict = vars(args)
