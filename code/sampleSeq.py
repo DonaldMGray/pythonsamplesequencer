@@ -255,16 +255,17 @@ class SequenceMgr():
     Responds to user events from keypad (not midi pad)
     """
     #This class is effectively a singleton, so not sure the "self._myvar" usage is needed.  Good hygene?
-    def __init__(self, timeArgDict):
-        self._timer = None
-        self.is_running = False
-        self.metroOn = True
+    def __init__(self, timeArgDict, swingTime):
         if timeArgDict['bpm'] is not None:
             self.beatsPerMinute=int(timeArgDict['bpm'])
         else:
             self.beatsPerMinute=DEFAULT_BPM
         self.currSeq = Sequence(timeArgDict)
+        self.swingTime = swingTime
         self.currSeqNum = 0
+        self._timer = None
+        self.is_running = False
+        self.metroOn = True
         self.recording = False
         #self.seqList = [Sequence(timeArgDict)] * 10   #pre-init list of sequences in mem
         self.seqList = [None] * 10   #pre-init list of sequences in mem
@@ -277,6 +278,7 @@ class SequenceMgr():
             #self.seqTime.clearTime() #restart the time sequence
         else:
             self.next_call += self.interval
+            #print(f"beat:{self.seqTime.beat}; subBeat:{self.seqTime.subBeat}; timeInterval:{self.interval}")
         self._timer = threading.Timer(self.next_call - time.time(), self._run)
         self._timer.start()
 
@@ -285,6 +287,8 @@ class SequenceMgr():
         self.is_running = False
 
     def _run(self):
+        #bump the time - do this first so that everything is lined up to the new tick
+        self.seqTime.advanceTime()
         self.start() #set next timer trigger
         self.advanceSequence() #run the sequencer
 
@@ -308,15 +312,25 @@ class SequenceMgr():
     @property
     def interval(self):
         """ time interval """
-        return 60 / self.beatsPerMinute / self.seqTime.timeSig['numSubBeats'] / 2  #the 2 is because of "isTock"
+        """ In "straight time" the subbeats are 50% of the beats (eg: eighth notes in 4/4 time)
+            In "swing" the subbeats are 2/3 (and 1/3) of the beats (or more/less)
+            So to make swing we change the interval size by (2/3 / 0.5) and (1/3 / 0.5) 
+        """
+        straightTimeInterval =  60 / self.beatsPerMinute / self.seqTime.timeSig['numSubBeats'] / 2  #the 2 is because of "isTock"
+        if not self.swingTime:
+            timeInterval = straightTimeInterval
+        else: #swing
+            if self.seqTime.subBeat % 2 is 0:
+                timeInterval = straightTimeInterval * 2/3 / 0.5
+            else:
+                timeInterval = straightTimeInterval * 1/3 / 0.5
+        return timeInterval
 
     def updateDisplay(self):
         display.updateSettings(self.beatsPerMinute, sampMgr.currSampleDir, self.currSeqNum, self.recording)
 
     def advanceSequence(self):
-        #bump the time - do this first so that everything is lined up to the new tick
-        self.seqTime.advanceTime()
-        #and the display
+        #update the display
         display.updateTime(self.seqTime.measure+1, self.seqTime.beat+1)
 
         #play note(s) in sequence
@@ -622,7 +636,7 @@ class Display():
         bpmStr = "{0:<3d}".format(bpm)
         self._lcd.write(bpmStr, 1,10)
         if rcd: rcding=rcdChar
-        else: rcding=" "
+        else: rcding="  "
         self._lcd.write(rcding,1,14)
         self._lcd.write(str(seqNum),2,4)
         self._lcd.write(str(sampSet),2,12)
@@ -655,7 +669,7 @@ def main(argDict):
     timeSigArgs = dict( (k, argDict[k]) for k in ('bpm', 'numMeasures', 'numBeats', 'numSubBeats') )
 
     sampMgr = SampleMgr()
-    seqMgr = SequenceMgr(timeSigArgs)  #creates SeqTime, etc... Only pass relevant args 
+    seqMgr = SequenceMgr(timeSigArgs, argDict['swingTime'])  #creates SeqTime, etc... Only pass relevant args 
     midi = ThreadedMidi()   #this kicks off the midi event handler
 
     #load sequence file(s)
@@ -706,6 +720,7 @@ if __name__ == "__main__":
     parser.add_argument("--numMeasures", type=int, help="# measures in sequence")
     parser.add_argument("--numBeats",  type=int, help="# Beats per Measure")
     parser.add_argument("--numSubBeats",  type=int, help="# Subbeats within beats")
+    parser.add_argument("--swingTime", action='store_true', help="Use swing time")
     parser.add_argument("--loadSeq", action='append', help="load a json encoded sequence file from storedSequences. If only filename specified, will load into slot 0, can also specify slot vis --loadSeq=<fileName>,<slotNum>") 
     parser.add_argument("--logLevel", help="Set the logging level")
     args = parser.parse_args()
