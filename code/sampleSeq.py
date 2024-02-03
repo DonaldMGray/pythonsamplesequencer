@@ -12,15 +12,13 @@ import logging
 import signal
 import argparse
 import json
-import pickle
 import copy  #deep object copy
 import lcdDisplay  #dmg - display module control
 #from collections import namedtuple
 from enum import Enum, auto
 
 #set logging level
-#LOG_LEVEL = logging.DEBUG
-LOG_LEVEL = logging.INFO
+LOG_LEVEL = logging.INFO    #default; is adjustable via --logLevel
 PRINT_TIME = False
 
 #may help pygame??
@@ -78,7 +76,8 @@ class PygameSetup():
         pygame.event.set_allowed(pygame.KEYUP)
 
 #needs to be set for the specific Midi input device
-midiNoteList = [36,37,38,39, 40,41,42,43, 44,45,46,47, 48,49,50,51]
+#midiNoteList = [36,37,38,39, 40,41,42,43, 44,45,46,47, 48,49,50,51] #this is set of 16 notes for scene 0.  Other scenes continue notes from here (modulus 16).  eg: 52-67
+MIDI_FIRST_NOTE = 36 #The first note - scene0:36-51; scene1:52-67; scene2: 68-83; scene3: 84-99
 midiDevice = 1  #The nanopad tends to be device #1
 
 class ThreadedMidi(threading.Thread):
@@ -98,26 +97,28 @@ class ThreadedMidi(threading.Thread):
             exit()
         inport = mido.open_input(midiPorts[midiDevice])
         for msg in inport:
-            #logging.debug("Midi msg==> %s", msg)
-            if msg.type == "program_change":
-                toggleSeq()
+            logging.debug("Midi msg==> %s", msg)
+            if msg.type == "sysex":
+                logging.debug(f"sysex msg: {msg.data}")
+                seqMgr.handleSceneChange(msg.data[-1])
             elif msg.type == "note_on":
+                logging.debug("Midi note_on ==> %s", msg.note)
                 seqMgr.handleNoteIn(msg.note)
 
 class SeqTime():
     """
-    Holds time signature elements - beatsPerMinute, numBeats, divisions per beat
+    Holds current time elements - measure; beat, sub-beat
 
     "isTock" is introduced to double the sampling rate (2x faster than the subbeat rate)
     This is important for capturing input - we want 2x sampling so we can "round" the capture time to be 
     closest to the right time point
     """
     def __init__(self, seq):
-        self.seq = seq
         self.timeSig = seq.sequence['timeSig']
+        self.numTicks = seq.numTicks
         self.clearTime()
 
-    def clearTime(self):
+    def clearTime(self):  #set all values to just b4 zero so that first advance will cleanly start at zero
         """ reset time clock """
         self.measure = self.timeSig['numMeasures']-1
         self.beat = self.timeSig['numBeats']-1
@@ -149,7 +150,7 @@ class SeqTime():
         if not self.isTock:
             return self.tick
         else:
-            return (self.tick + 1) % self.seq.numTicks
+            return (self.tick + 1) % self.numTicks
 
 
 DEFAULT_BPM = 120
@@ -159,58 +160,55 @@ DEFAULT_NUMSUBBEATS = 2
 numPoly = 6  #how many simultaneous voices
 class Sequence():
     """ 
-    A polyphonic sequence - [ONLY ONE VOICE PER TICK SUPPORTED CURRENTLY!!]
-    Polyphonic uses the multiple channels of the mixer (8 total, one used by metronome)
+    A polyphonic sequence 
+    Polyphonic uses the multiple channels of the mixer (8 total, one used by metronome, one for real-time input)
     Note however that if two notes happen to be using the same channel and the first note is a long duration, it will get interrupted by the next note on that same channel
+    This issue can be observed for example when using the tabla sample set
     """
 
-    def __init__(self, arg):
-        if isinstance(arg, dict):   #must be dictionary of timeSig
-            self.timeSig = self.TimeSig(arg).timeSig
-            self.sequence = self.newSequence(self.timeSig)
-            self._addedNotes = list()  #list of ticks where notes have been added to sequence (allows deleting in LIFO order)
+    def __init__(self, arg=None):
+        if isinstance(arg, dict):   #dictionary of time signature elements
+            timeSig = self.createTimeSig(arg)
+            self.initSequence(timeSig)
         elif isinstance(arg, str):  #must be a filename to load
             with open (arg, mode="r") as jsonFile:
-                seq=json.load(jsonFile)
-            self.timeSig = seq['timeSig']
-            self.sequence = self.newSequence(self.timeSig)
-            self.sequence['noteList']=seq['noteList']
-            self._addedNotes = list()  #list of ticks where notes have been added to sequence (allows deleting in LIFO order)
-            print ("loaded sequence from: {0}\n {1} {2}".format(arg, seq['timeSig'], seq['noteList']) )
+                loadedSeq=json.load(jsonFile)
+            timeSig = self.createTimeSig(loadedSeq['timeSig'])
+            print(f"timeSig: {timeSig}")
+            self.initSequence(timeSig)
+            self.sequence['noteList']=loadedSeq['noteList']
+            print ("loaded sequence from: {0}\n {1} {2}".format(arg, loadedSeq['timeSig'], loadedSeq['noteList']) )
         else:
             raise TypeError('Type: {0} not supported'.format(type(arg)))
 
-    class TimeSig:
-        def __init__ (self, timeSigArgs):
-            self.timeSig = dict()
-            if timeSigArgs['numMeasures'] is not None:
-                self.timeSig['numMeasures']=int(timeSigArgs['numMeasures'])
-            else:
-                self.timeSig['numMeasures']=DEFAULT_NUMMEAS
-            if timeSigArgs['numBeats'] is not None:
-                self.timeSig['numBeats']=int(timeSigArgs['numBeats'])
-            else:
-                self.timeSig['numBeats']=DEFAULT_NUMBEATSPERMEAS
-            if timeSigArgs['numSubBeats'] is not None:
-                self.timeSig['numSubBeats']=int(timeSigArgs['numSubBeats'])
-            else:
-                self.timeSig['numSubBeats']=DEFAULT_NUMSUBBEATS
-
-    def newSequence(self, timeSig):
-        seq = {
-                "timeSig" : timeSig,
-                "noteList" : [list() for x in range(self.numTicks)]
-                }
-
-        timeSig = seq['timeSig']
-
-        return seq
+    def createTimeSig(self, timeSigArgs):
+        timeSig = dict()
+        if timeSigArgs['numMeasures'] is not None:
+            timeSig['numMeasures']=int(timeSigArgs['numMeasures'])
+        else:
+            timeSig['numMeasures']=DEFAULT_NUMMEAS
+        if timeSigArgs['numBeats'] is not None:
+            timeSig['numBeats']=int(timeSigArgs['numBeats'])
+        else:
+            timeSig['numBeats']=DEFAULT_NUMBEATSPERMEAS
+        if timeSigArgs['numSubBeats'] is not None:
+            timeSig['numSubBeats']=int(timeSigArgs['numSubBeats'])
+        else:
+            timeSig['numSubBeats']=DEFAULT_NUMSUBBEATS
+        return timeSig
 
     @property
     def numTicks(self):
-        return self.timeSig['numMeasures'] * self.timeSig['numBeats'] * self.timeSig['numSubBeats']
+        timeSig = self.sequence['timeSig']
+        return timeSig['numMeasures'] * timeSig['numBeats'] * timeSig['numSubBeats']
 
-    def clear(self):
+    def initSequence(self, timeSig):
+        if timeSig is None: timeSig=self.createTimeSig()
+        self.sequence = dict()
+        self.sequence['timeSig'] = timeSig
+        self.clearSequence()
+
+    def clearSequence(self):
         self.sequence['noteList'] = [list() for x in range(self.numTicks)]
         self._addedNotes = list()  #list of ticks where notes have been added to sequence (allows deleting in LIFO order)
 
@@ -221,7 +219,7 @@ class Sequence():
     def addNote(self, tick, note):
         noteList = self.sequence['noteList']
         if len(noteList[tick]) >= numPoly:
-            logging.debug("Overflowed poly on tick: %s", tick)
+            logging.warn("Overflowed poly on tick: %s", tick)
             del noteList[tick][0]
         self._addedNotes.append(tick)
         noteList[tick].append(note) 
@@ -263,7 +261,6 @@ class SequenceMgr():
         self.currSeq = Sequence(timeArgDict)
         self.swingTime = swingTime
         self.currSeqNum = 0
-        self._timer = None
         self.is_running = False
         self.metroOn = True
         self.recording = False
@@ -275,7 +272,6 @@ class SequenceMgr():
         if not self.is_running:
             self.is_running = True
             self.next_call = time.time()
-            #self.seqTime.clearTime() #restart the time sequence
         else:
             self.next_call += self.interval
             #print(f"beat:{self.seqTime.beat}; subBeat:{self.seqTime.subBeat}; timeInterval:{self.interval}")
@@ -298,7 +294,7 @@ class SequenceMgr():
     @currSeq.setter
     def currSeq(self, value):
         self._currSeq = value
-        self.seqTime = SeqTime(self.currSeq)
+        self.seqTime = SeqTime(value)
 
     @property
     def beatsPerMinute(self):
@@ -368,16 +364,21 @@ class SequenceMgr():
             except IndexError:
                 logging.warning('Tick count is longer than sequence note list')
 
+    def handleSceneChange(self, scene):
+        logging.info(f'Scene: {scene}')
 
     def handleNoteIn(self,note):
         """
         Handle midi note pressed
         If recording, add to the current sequence
         """
+
+        logging.debug("Handling note %s", note)
         if self.recording and self.seqTime.isTock:  #avoid the double play that happens if we enter a note in the Tock while recording (because the recording will play it the 2nd time)
             #can be a bit disconcerting with really slow tempo, but I think is better experience
             pass
         else:
+            #print(f"playing note {note}")
             self.playMidiNote(note,chanUserInput)  #Poly allowed for chans [0:5], metronome is chan 7
         #add note to sequence
         if self.recording:
@@ -387,7 +388,10 @@ class SequenceMgr():
     def playMidiNote(self,note,chan):
         """ Based on midi input msg, play a sound """
         try:
-            sampNum = midiNoteList.index(note)
+            #sampNum = midiNoteList.index(note)
+            sampNum = (note-MIDI_FIRST_NOTE) % 16
+            print (f"note: {note}")
+            print (f"sampNum: {sampNum}")
         except ValueError:
             #pass
             return
@@ -454,7 +458,7 @@ class SequenceMgr():
                 self.currSeq.delNote()
             else:
                 logging.info("clear current sequence")
-                self.currSeq.clear()
+                self.currSeq.clearSequence()
 
         #recording on/off - NumLk
         if keyType == KeyTypes.numlock_on:
@@ -649,7 +653,6 @@ def main(argDict):
         if argDict['logLevel'] == 'debug':
             logLevel = logging.DEBUG
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', datefmt='%I:%M:%S %p', level=logLevel)
-    print ("TESTING", file=sys.stderr)
 
     #handle system signals (seems to be an issue when autostarting via systemd)
     def handler(signum, frame):
