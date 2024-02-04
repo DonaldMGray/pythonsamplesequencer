@@ -174,10 +174,10 @@ class Sequence():
             with open (arg, mode="r") as jsonFile:
                 loadedSeq=json.load(jsonFile)
             timeSig = self.createTimeSig(loadedSeq['timeSig'])
-            print(f"timeSig: {timeSig}")
+            logging.info(f"timeSig: {timeSig}")
             self.initSequence(timeSig)
             self.sequence['noteList']=loadedSeq['noteList']
-            print ("loaded sequence from: {0}\n {1} {2}".format(arg, loadedSeq['timeSig'], loadedSeq['noteList']) )
+            logging.info("loaded sequence from: {0}\n {1} {2}".format(arg, loadedSeq['timeSig'], loadedSeq['noteList']) )
         else:
             raise TypeError('Type: {0} not supported'.format(type(arg)))
 
@@ -366,6 +366,22 @@ class SequenceMgr():
 
     def handleSceneChange(self, scene):
         logging.info(f'Scene: {scene}')
+        if scene is 0:
+            self.stop()
+            self.currSeq=Sequence(savedSequenceDir + "basic.json")  #means the last one specified will be played
+            currSampleDir = 2   #PearlKit - would be better if could ref by name
+            self.beatsPerMinute = 120
+            self.swingTime = False
+            self.updateDisplay()
+            self.start()
+        elif scene is 1:
+            self.stop()
+            self.currSeq=Sequence(savedSequenceDir + "swing2.json")  #means the last one specified will be played
+            currSampleDir = 2   #PearlKit - would be better if could ref by name
+            self.beatsPerMinute = 100
+            self.swingTime = True
+            self.updateDisplay()
+            self.start()
 
     def handleNoteIn(self,note):
         """
@@ -390,10 +406,7 @@ class SequenceMgr():
         try:
             #sampNum = midiNoteList.index(note)
             sampNum = (note-MIDI_FIRST_NOTE) % 16
-            print (f"note: {note}")
-            print (f"sampNum: {sampNum}")
-        except ValueError:
-            #pass
+        except ValueError: #
             return
         sampleSet = sampMgr.sampleSets[sampMgr.currSampleDir]
         if len(sampleSet.sampleSounds) < sampNum+1:
