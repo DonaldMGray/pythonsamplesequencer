@@ -316,7 +316,7 @@ class SequenceMgr():
         if not self.swingTime:
             timeInterval = straightTimeInterval
         else: #swing
-            if self.seqTime.subBeat % 2 is 0:
+            if self.seqTime.subBeat % 2 == 0:
                 timeInterval = straightTimeInterval * 2/3 / 0.5
             else:
                 timeInterval = straightTimeInterval * 1/3 / 0.5
@@ -366,18 +366,19 @@ class SequenceMgr():
 
     def handleSceneChange(self, scene):
         logging.info(f'Scene: {scene}')
-        if scene is 0:
+
+        if scene == 0:
             self.stop()
             self.currSeq=Sequence(savedSequenceDir + "basic.json")  #means the last one specified will be played
-            currSampleDir = 2   #PearlKit - would be better if could ref by name
+            currSampleDir = sampMgr.index("PearlKitMapped")
             self.beatsPerMinute = 120
             self.swingTime = False
             self.updateDisplay()
             self.start()
-        elif scene is 1:
+        elif scene == 1:
             self.stop()
             self.currSeq=Sequence(savedSequenceDir + "swing2.json")  #means the last one specified will be played
-            currSampleDir = 2   #PearlKit - would be better if could ref by name
+            currSampleDir = sampMgr.index("PearlKitMapped")
             self.beatsPerMinute = 100
             self.swingTime = True
             self.updateDisplay()
@@ -552,6 +553,12 @@ class SampleMgr():
             sampSet = SampleSet(sampDir)
             self.sampleSets.append(sampSet)
 
+    def index(self, name):  #given a name (string) return the sample list index 
+        for sampSet in self.sampleSets:
+            if sampSet.sampleDir == name:
+                return self.sampleSets.index(sampSet)
+        return None
+
 class KeyTypes(Enum):
     """ enumerate the types of keys in the num keypad """
     num = auto()
@@ -692,7 +699,7 @@ def main(argDict):
     if argDict['loadSeq'] is not None:
         fileArgs = argDict['loadSeq']
         for fileArg in fileArgs: #loadSeq arg is a list (append option) because we want to allow multiple instances of it
-            if fileArg.find(',') is -1: #just specified a file
+            if fileArg.find(',') == -1: #just specified a file
                 fileName = fileArg
                 slotNum = 0
             else:   #specified a file and slot number to store it in
