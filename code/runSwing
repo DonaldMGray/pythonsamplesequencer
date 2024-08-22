@@ -1,2 +1,0 @@
-sudo python3 sampleSeq.py --bpm=100 --numMeasures=2 --numBeats=4 --numSubBeats=2 --swingTime --loadSeq=swing1.json
-

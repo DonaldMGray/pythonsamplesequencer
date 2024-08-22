@@ -1,0 +1,3 @@
+sudo python3 code/sampleSeq.py --bpm=60 --numMeasures=2 --numBeats=4 --numSubBeats=2 --logLevel=debug
+
+

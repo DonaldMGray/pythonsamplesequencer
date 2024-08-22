@@ -28,35 +28,68 @@ os.environ["SDL_VIDEODRIVER"] = "dummy"
 #  seqMgr, sampMgr, display
 
 """
-This is a drum sequence generator.
+====================
+    THE FOLLOWING COMMENTS ARE COPIED FROM THE MS WORD DOC
+====================
+A �sequence� consists of recorded notes in time.
+There are numMeasures measures in the sequence; numBeats beats per measure; numSubBeats per beat.  T
+he subbeats allow for beat smaller than the time signature eg: allow 1/8th notes in 4/4 time
+The beatsPerMinute can also be adjusted
 
-A 'sequence' consists of recorded notes in time.  A sequence has a length numMeasures * numBeats * numSubBeats
-Sequences can be stored and reloaded (to local mem).  Can also be saved to file and loaded in via cmd line arg
-The “current Sequence” is the one currently being edited.
-The starting current Sequence is empty
+Sequences can be stored and loaded to/from local mem �banks� 0-9.
+Sequences can also be saved to files (marked with current date/time) and also loaded from files (onl
+y via cmd line)
 
+The �CurrentSequence� is the one currently being edited � default empty unless specified when starte
+d in cmd line
 
-"Samples" allow mapping from notes to music samples.
-The “current sample set” is the one being used by the current sequence at any one time.
+�Samples� allow mapping from notes to music samples.
+The �current sample set� is the one being used by the current sequence at any one time.
 The starting current Sample is the first sub-directory alphabetically in the Samples directory.
-By default, samples are “unbound” to sequences, meaning the current sample can be changed and the current sequence will then play using the (new) current sample.
-TODO -If a sequence is “sample bound”, then the samples associated with the sequence notes are remembered and will not change when the current sample is changed.
+By default, samples are �unbound� to sequences, meaning the current sample can be changed and the cu
+rrent sequence will then play using the (new) current sample.
+Future: Allow a sequence to be �sample bound�, then the samples associated with the sequence notes a
+re remembered and will not change when the current sample is changed.  (Requires storing index to sa
+mple sets per note)
 
-Major classes:
-* Sequence manager –loads samples; plays sequences; listens for user events
-    Note that samples should be 16bps (or less?)
+Polyphony (enable playing multiple notes simultaneously)
+Mixer has 8 channels (0-7)
+�	Dedicate ch7 to metronome
+�	Dedicate ch6 to �live� note
+�	0-5 are for sequence playback
+In the rare circumstance that more than 6 notes are layered in a sequence at the same timespace, the
+ oldest will be removed.
+Issue: A note that plays for a long time (more than one sub-beat) will likely be cut short by the ne
+xt note played on a later beat but same mixer channel.
+TODO: Would need to detect that that mixer channel is still playing (how?) and shift up to next non-
+playing channel
 
-Notes:
-    Polyphony - The mixer has n channels (8?)
-    For each channel, only one sound can play at a time.  New sound interrupts 
+Control keys:
+	Enter	Start/Stop play
+	.	Metronome on/off
+	+/-	bpm change +/- 5bpm
+	* & +/- 	+/- 10bpm
+	/ & +/-	+/- 1 bpm
+	bkspc	Delete last note entered
+	*-bkspc Clear current Sequence
+	NumLk  Record on/off
+	[0-9]	Load seq from mem bank 0-9
+	*[0-9]	Store curr seq into mem bank 0-9
+	/[0-9]	Use sample 0-9
+	*-Enter   Save file to ../storedSequences + datetime
 
-Mixer channels (8 total?):
-    Polyphony:          chans [0:5] (6)
-    User played note:   chan 6
-    Metronome:          chan 7
-TODO
---
+Scene 1-4 on nanoPad2� select scene (fully defined sequence, sample, timeSig)
 
+Command line options
+usage: sampleSeq.py [-h] [--bpm BPM] [--numMeasures NUMMEASURES]
+                    [--numBeats NUMBEATS] [--numSubBeats NUMSUBBEATS]
+                    [--swingTime] [--loadSeq LOADSEQ] [--logLevel LOGLEVEL]
+
+Interactive sample sequencer
+
+====================
+    END: THE FOLLOWING COMMENTS ARE COPIED FROM THE MS WORD DOC
+====================
 """
 
 class PygameSetup():
@@ -383,6 +416,14 @@ class SequenceMgr():
             self.swingTime = True
             self.updateDisplay()
             self.start()
+        elif scene == 2:
+            self.stop()
+            self.currSeq=Sequence(savedSequenceDir + "4x4_funk.json")  #means the last one specified will be played
+            currSampleDir = sampMgr.index("PearlKitMapped")
+            self.beatsPerMinute = 120
+            self.swingTime = False
+            self.updateDisplay()
+            self.start()
 
     def handleNoteIn(self,note):
         """
@@ -484,7 +525,7 @@ class SequenceMgr():
             self.recording = False
             self.updateDisplay()
         
-        #store/restore seq to/from mem or change sample - 0-9
+        #Number '0-9' - load sample or store/load seq to/from mem or change sample - 0-9
         if keyType == KeyTypes.num: 
             #logging.info("num: %s", keyVal)
             if modSlash:    #load sample
@@ -502,7 +543,7 @@ class SequenceMgr():
                 else:
                     self.loadSeq(keyVal)
 
-topSampleDir = '../samples/'
+topSampleDir = 'samples/'
 metroDir = topSampleDir + 'ZZ_Metronome/'
 sampleExtension = '/*.wav'
 class SampleSet():
@@ -665,7 +706,7 @@ class Display():
         self._lcd.write(str(seqNum),2,4)
         self._lcd.write(str(sampSet),2,12)
 
-savedSequenceDir = '../savedSequences/'
+savedSequenceDir = 'savedSequences/'
 def main(argDict):
     #setup logging
     logLevel = LOG_LEVEL #default as specified statically
@@ -704,7 +745,7 @@ def main(argDict):
                 slotNum = 0
             else:   #specified a file and slot number to store it in
                 (fileName, slotNum) = fileArg.split(',')
-            fileName = savedSequenceDir + fileName
+            #fileName = savedSequenceDir + fileName  ---- don't prepend a dir, let user specify
             logging.info("Loading sequence file: " + fileName)
             seqMgr.currSeq=Sequence(fileName)  #means the last one specified will be played
             seqMgr.storeSeq(int(slotNum))  #store into mem slot  
@@ -738,7 +779,7 @@ if __name__ == "__main__":
     #argDict = dict(arg.split('=') for arg in sys.argv[1:])  #don't include the executable name
 
     #more powerful is to use argparse ==>
-    parser = argparse.ArgumentParser(description="Interactive sample sequencer")
+    parser = argparse.ArgumentParser(description="Interactive sample sequencer.  Default time sig is 4-4 @ 120bpm")
     parser.add_argument("--bpm",  type=int, help="# Beats per Minute")
     parser.add_argument("--numMeasures", type=int, help="# measures in sequence")
     parser.add_argument("--numBeats",  type=int, help="# Beats per Measure")
