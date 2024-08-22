@@ -1,2 +1,2 @@
-sudo python3 code/sampleSeq.py --loadSeq savedSequences/4x4_funk.json
+sudo python3 code/sampleSeq.py --loadSeq savedSequences/4x4_funkPlus.json
 

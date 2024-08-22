@@ -266,7 +266,7 @@ class Sequence():
         logging.debug('deleted from tick: %s', noteTick)
 
     def saveSequence(self): #save seq to file via json (restore is by creating Sequence(fileName) )
-        fileName = "../savedSequences/sequence" + datetime.datetime.now().strftime("%Y_%m_%d__%H_%M") + ".json"
+        fileName = "savedSequences/sequence" + datetime.datetime.now().strftime("%Y_%m_%d__%H_%M") + ".json"
         logging.info("Saving sequence file: " + fileName)
         with open (fileName, mode="w") as jsonFile:
             json.dump(self.sequence, jsonFile, indent=4)
@@ -402,7 +402,7 @@ class SequenceMgr():
 
         if scene == 0:
             self.stop()
-            self.currSeq=Sequence(savedSequenceDir + "basic.json")  #means the last one specified will be played
+            self.currSeq=Sequence(savedSequenceDir + "rock.json")  #means the last one specified will be played
             currSampleDir = sampMgr.index("PearlKitMapped")
             self.beatsPerMinute = 120
             self.swingTime = False
