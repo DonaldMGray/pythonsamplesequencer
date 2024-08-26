@@ -92,16 +92,21 @@ Interactive sample sequencer
 ====================
 """
 
+NUM_MIXER_CHANNELS = 16
 class PygameSetup():
     """
     Handle pygame initialization
     """
     def initPygame(self):
         # buffer size should be set low to ensure good timing; but too low can cause audio glitches
-        # ~512 rcmd
+        # Buffer size ~512 rcmd
+        # Should be able to support 16 chans
         pygame.mixer.pre_init(frequency=22050, size=-16, channels=8, buffer=512)
         #pygame.init()  #don't init all of pygame as this gets us into issues with the display
         pygame.mixer.init()
+        pygame.mixer.set_num_channels(NUM_MIXER_CHANNELS) #even though we asked for 16 chans in the pre-init, seems to only have 8, so increase them now
+        #res = pygame.mixer.set_reserved(4) #first 4 channels reserved (metronome, ...)
+        #logging.info("reservedi channels: %s", res)  #doesn't seem to reserve...
         #keyboard event handling - only looking for keyboard up/down (not mouse)
         pygame.display.set_mode()
         pygame.event.set_allowed(None)
@@ -190,7 +195,15 @@ DEFAULT_BPM = 120
 DEFAULT_NUMMEAS = 4
 DEFAULT_NUMBEATSPERMEAS = 4
 DEFAULT_NUMSUBBEATS = 2
-numPoly = 6  #how many simultaneous voices
+
+"""
+seqChanStart = 0
+liveChanStart = 10   #for "live" note input
+numLiveChan = 4
+"""
+numSeqChan = 8  #how many simultaneous voices are allowed (per tick)
+chanMetro = 15   #which mixer channel to use for metronome
+
 class Sequence():
     """ 
     A polyphonic sequence 
@@ -251,7 +264,7 @@ class Sequence():
 
     def addNote(self, tick, note):
         noteList = self.sequence['noteList']
-        if len(noteList[tick]) >= numPoly:
+        if len(noteList[tick]) >= numSeqChan:
             logging.warn("Overflowed poly on tick: %s", tick)
             del noteList[tick][0]
         self._addedNotes.append(tick)
@@ -276,9 +289,6 @@ class Sequence():
 
 
 #Mixer channel allocation
-#[0:5] are for 6 poly voices 
-chanUserInput = 6   #for "live" note input
-chanMetro = 7   #which mixer channel to use for metronome
 
 class SequenceMgr():
     """
@@ -379,21 +389,17 @@ class SequenceMgr():
                     else:
                         metroSamp = sampMgr.metro
                         metroVol = 0.3
-                    pygame.mixer.Channel(chanMetro).set_volume(metroVol)
-                    pygame.mixer.Channel(chanMetro).play(metroSamp);
+                    metroChan = pygame.mixer.find_channel(True)  
+                    metroChan.set_volume(metroVol)
+                    metroChan.play(metroSamp);
 
             #Now play all the notes in this tick
             seqNoteList = self.currSeq.sequence['noteList']
             try:
                 seqTickNotes = seqNoteList[self.seqTime.tick]
                 if len(seqTickNotes) != 0:
-                    self.mixChan=0
-                    if True:    #enable poly
-                        for note in seqTickNotes:
-                            self.playMidiNote(note, self.mixChan)
-                            self.mixChan += 1
-                    else:  #no poly
-                        self.playMidiNote(seqTickNotes[0],0) 
+                    for note in seqTickNotes:
+                        self.playMidiNote(note) 
             except IndexError:
                 logging.warning('Tick count is longer than sequence note list')
 
@@ -425,6 +431,7 @@ class SequenceMgr():
             self.updateDisplay()
             self.start()
 
+    #for "live" notes (vs those recorded in sequence)
     def handleNoteIn(self,note):
         """
         Handle midi note pressed
@@ -437,25 +444,40 @@ class SequenceMgr():
             pass
         else:
             #print(f"playing note {note}")
-            self.playMidiNote(note,chanUserInput)  #Poly allowed for chans [0:5], metronome is chan 7
+            self.playMidiNote(note)  #Poly allowed for chans [0:5], metronome is chan 7
+            """ debug channel alloc (see if reserved works)
+            for chan in range(NUM_MIXER_CHANNELS):
+                busy = pygame.mixer.Channel(chan).get_busy()
+                logging.debug("chan %s busy: %s", chan, busy)
+            """
+
         #add note to sequence
         if self.recording:
             noteTick = self.seqTime.roundedTick
             self.currSeq.addNote(noteTick, note)
 
-    def playMidiNote(self,note,chan):
+    def playMidiNote(self,note):
         """ Based on midi input msg, play a sound """
         try:
-            #sampNum = midiNoteList.index(note)
-            sampNum = (note-MIDI_FIRST_NOTE) % 16
+            sampIndx = (note-MIDI_FIRST_NOTE) % 16  #mod 16 is because notes in alt scenes on nanoPad2 progressively higher up
         except ValueError: #
             return
         sampleSet = sampMgr.sampleSets[sampMgr.currSampleDir]
-        if len(sampleSet.sampleSounds) < sampNum+1:
-            logging.debug('Sample %s does not exist in SampleSet %s', sampNum, sampleSet.sampleDir)
+        if len(sampleSet.sampleSounds) < sampIndx+1:
+            logging.debug('Sample %s does not exist in SampleSet %s', sampIndx, sampleSet.sampleDir)
             return
-        logging.debug('playing midi:%s sample#:%s %s', note, sampNum, sampleSet.sampleNames[sampNum])
-        pygame.mixer.Channel(chan).play(sampleSet.sampleSounds[sampNum])
+        logging.debug('playing midi:%s sample#:%s %s', note, sampIndx, sampleSet.sampleNames[sampIndx])
+        """
+        for chan in range(chanStart, chanStart+chanLen):
+            #logging.info('checking chan %s', chan)
+            if pygame.mixer.Channel(chan).get_busy():  #see if channel is currently playing a note
+                #logging.info('had to skip')
+                continue
+            pygame.mixer.Channel(chan).play(sampleSet.sampleSounds[sampIndx])
+            break
+        """   
+        chan = pygame.mixer.find_channel(True) #force it to find a channel (will kick off oldest note)
+        chan.play(sampleSet.sampleSounds[sampIndx])
 
     def storeSeq(self, slot):  #store a seq to mem
         logging.info("Store to seqbank: %s", slot)
@@ -552,7 +574,7 @@ class SampleSet():
         self.sampleDir = sampleDir
         self.samplePaths= glob.glob(topSampleDir + self.sampleDir + sampleExtension)
         self.samplePaths.sort()
-        self.sampleNames = list()
+        self.sampleNames = list()  #kludgy - names & sounds should be a tuple
         self.sampleSounds = list()
         for samp in self.samplePaths:
             snd = pygame.mixer.Sound(samp)
