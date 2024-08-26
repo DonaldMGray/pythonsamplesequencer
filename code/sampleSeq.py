@@ -105,8 +105,8 @@ class PygameSetup():
         #pygame.init()  #don't init all of pygame as this gets us into issues with the display
         pygame.mixer.init()
         pygame.mixer.set_num_channels(NUM_MIXER_CHANNELS) #even though we asked for 16 chans in the pre-init, seems to only have 8, so increase them now
-        #res = pygame.mixer.set_reserved(4) #first 4 channels reserved (metronome, ...)
-        #logging.info("reservedi channels: %s", res)  #doesn't seem to reserve...
+        res = pygame.mixer.set_reserved(1) #first channel reserved for metronome
+        logging.info("reserved channels: %s", res)  #doesn't seem to reserve...
         #keyboard event handling - only looking for keyboard up/down (not mouse)
         pygame.display.set_mode()
         pygame.event.set_allowed(None)
@@ -202,7 +202,7 @@ liveChanStart = 10   #for "live" note input
 numLiveChan = 4
 """
 numSeqChan = 8  #how many simultaneous voices are allowed (per tick)
-chanMetro = 15   #which mixer channel to use for metronome
+chanMetro = 0   #which mixer channel to use for metronome.  This is a reserved channel
 
 class Sequence():
     """ 
@@ -389,7 +389,7 @@ class SequenceMgr():
                     else:
                         metroSamp = sampMgr.metro
                         metroVol = 0.3
-                    metroChan = pygame.mixer.find_channel(True)  
+                    metroChan = pygame.mixer.Channel(chanMetro)
                     metroChan.set_volume(metroVol)
                     metroChan.play(metroSamp);
 
@@ -467,18 +467,14 @@ class SequenceMgr():
             logging.debug('Sample %s does not exist in SampleSet %s', sampIndx, sampleSet.sampleDir)
             return
         logging.debug('playing midi:%s sample#:%s %s', note, sampIndx, sampleSet.sampleNames[sampIndx])
-        """
-        for chan in range(chanStart, chanStart+chanLen):
-            #logging.info('checking chan %s', chan)
-            if pygame.mixer.Channel(chan).get_busy():  #see if channel is currently playing a note
-                #logging.info('had to skip')
-                continue
-            pygame.mixer.Channel(chan).play(sampleSet.sampleSounds[sampIndx])
-            break
-        """   
+        sound = sampleSet.sampleSounds[sampIndx]
         chan = pygame.mixer.find_channel(True) #force it to find a channel (will kick off oldest note)
-        chan.play(sampleSet.sampleSounds[sampIndx])
-
+        #chan.play(sound)
+        sound.play()    #this appears to be the only way to get a channel that isn't reserved (find_channel will find any unavailable chan)
+        """ use to check channel allocation (first N chans are reserved)
+        for chan in range(NUM_MIXER_CHANNELS):
+            print("chan: %s -- busy: %s", chan, pygame.mixer.Channel(chan).get_busy())
+        """
     def storeSeq(self, slot):  #store a seq to mem
         logging.info("Store to seqbank: %s", slot)
         self.seqList[slot] = copy.deepcopy(self.currSeq)
