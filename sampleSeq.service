@@ -1,4 +1,8 @@
+#
 # Contents of /etc/systemd/system/sampSeq.service
+#  (link this file to path above)
+#
+# Enable/disable by (un)commenting ExecStart line below
 
 [Unit]
 Description=Sample Sequencer

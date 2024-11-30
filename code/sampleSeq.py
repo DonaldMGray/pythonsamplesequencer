@@ -16,6 +16,7 @@ import copy  #deep object copy
 import lcdDisplay  #dmg - display module control
 #from collections import namedtuple
 from enum import Enum, auto
+from functools import reduce
 
 #set logging level
 LOG_LEVEL = logging.INFO    #default; is adjustable via --logLevel
@@ -137,8 +138,11 @@ class ThreadedMidi(threading.Thread):
         for msg in inport:
             logging.debug("Midi msg==> %s", msg)
             if msg.type == "sysex":
-                logging.debug(f"sysex msg: {msg.data}")
-                seqMgr.handleSceneChange(msg.data[-1])
+                try:
+                    logging.debug(f"sysex msg: {msg.data}")
+                    seqMgr.handleSceneChange(msg.data[-1])
+                except AttributeError:
+                    pass #catch condition where the scene change button is hit while still starting up
             elif msg.type == "note_on":
                 logging.debug("Midi note_on ==> %s", msg.note)
                 seqMgr.handleNoteIn(msg.note)
@@ -290,13 +294,14 @@ class Sequence():
 
 #Mixer channel allocation
 
+savedSequenceDir = 'savedSequences/'
 class SequenceMgr():
     """
     Manages all sequences & samples
     Responds to user events from keypad (not midi pad)
     """
     #This class is effectively a singleton, so not sure the "self._myvar" usage is needed.  Good hygene?
-    def __init__(self, timeArgDict, swingTime):
+    def __init__(self, timeArgDict, swingTime=True):
         if timeArgDict['bpm'] is not None:
             self.beatsPerMinute=int(timeArgDict['bpm'])
         else:
@@ -329,7 +334,7 @@ class SequenceMgr():
         #bump the time - do this first so that everything is lined up to the new tick
         self.seqTime.advanceTime()
         self.start() #set next timer trigger
-        self.advanceSequence() #run the sequencer
+        self.advanceSequence() #run the sequencer - play all notes in this tick
 
     @property 
     def currSeq(self):
@@ -370,7 +375,7 @@ class SequenceMgr():
 
     def advanceSequence(self):
         #update the display
-        display.updateTime(self.seqTime.measure+1, self.seqTime.beat+1)
+        display.updateTime(self.seqTime.measure+1, self.seqTime.beat+1) #I think the +1's are to shift from zero-based numbering
 
         #play note(s) in sequence
         if self.seqTime.isTock == False:  #only play on the front half of the interval
@@ -403,30 +408,38 @@ class SequenceMgr():
             except IndexError:
                 logging.warning('Tick count is longer than sequence note list')
 
+    #may capture all the scene deets in a struct (eg: BPM, ....) instead of just the filename
+    #rename as PRESET
+    #move these to be global...
+    SEQ_SCENE0 = savedSequenceDir + "rock.json"
+    SEQ_SCENE1 = savedSequenceDir + "swing2.json"
+    SEQ_SCENE2 = savedSequenceDir + "4x4_funk.json"
+
+
     def handleSceneChange(self, scene):
         logging.info(f'Scene: {scene}')
 
         if scene == 0:
             self.stop()
-            self.currSeq=Sequence(savedSequenceDir + "rock.json")  #means the last one specified will be played
+            self.currSeq=Sequence(SequenceMgr.SEQ_SCENE0)  #means the last one specified will be played
             currSampleDir = sampMgr.index("PearlKitMapped")
-            self.beatsPerMinute = 120
+            self.beatsPerMinute = 180
             self.swingTime = False
             self.updateDisplay()
             self.start()
         elif scene == 1:
             self.stop()
-            self.currSeq=Sequence(savedSequenceDir + "swing2.json")  #means the last one specified will be played
+            self.currSeq=Sequence(SequenceMgr.SEQ_SCENE1)  #means the last one specified will be played
             currSampleDir = sampMgr.index("PearlKitMapped")
-            self.beatsPerMinute = 100
+            self.beatsPerMinute = 120
             self.swingTime = True
             self.updateDisplay()
             self.start()
         elif scene == 2:
             self.stop()
-            self.currSeq=Sequence(savedSequenceDir + "4x4_funk.json")  #means the last one specified will be played
+            self.currSeq=Sequence(SequenceMgr.SEQ_SCENE2)  #means the last one specified will be played
             currSampleDir = sampMgr.index("PearlKitMapped")
-            self.beatsPerMinute = 120
+            self.beatsPerMinute = 130
             self.swingTime = False
             self.updateDisplay()
             self.start()
@@ -724,7 +737,6 @@ class Display():
         self._lcd.write(str(seqNum),2,4)
         self._lcd.write(str(sampSet),2,12)
 
-savedSequenceDir = 'savedSequences/'
 def main(argDict):
     #setup logging
     logLevel = LOG_LEVEL #default as specified statically
@@ -748,14 +760,43 @@ def main(argDict):
         logging.warning("Got exception: {}".format(ex))
 
     display = Display()
+
+    #load all the cmd args regarding timing (bpm, numMeasures, numBeats, numSubBeats)
     timeSigArgs = dict( (k, argDict[k]) for k in ('bpm', 'numMeasures', 'numBeats', 'numSubBeats') )
 
-    sampMgr = SampleMgr()
-    seqMgr = SequenceMgr(timeSigArgs, argDict['swingTime'])  #creates SeqTime, etc... Only pass relevant args 
+    #determine if any args are set which set timeSig (including loading a file)
+    # if not, play the default
+    checkArgList = timeSigArgs.copy()
+    swingArgString = "swingTime"
+    checkArgList[swingArgString] = argDict[swingArgString]
+    loadSeqArgString = "loadSeq"
+    checkArgList[loadSeqArgString] = argDict[loadSeqArgString]
+
+    argsAreNone = list(map(lambda key: argDict[key] == None, checkArgList.keys() ))
+    useDefault = reduce( lambda a, b: a and b, argsAreNone ) #indicates whether to play the default sequence and time sig
+
+    ################
+    #init everything
+    ################
     midi = ThreadedMidi()   #this kicks off the midi event handler
+    logging.info("About to start Pygame")
+    pySetup.initPygame()
+    logging.info("After init of Pygame")
+    sampMgr = SampleMgr()
+    sampMgr.findSamples()
+    display.initDisplay()
+    seqMgr = SequenceMgr(timeSigArgs, argDict['swingTime'])  #creates SeqTime, etc... Only pass relevant args 
+    seqMgr.updateDisplay()
+    seqMgr.start()
+    keyHandler = KeyEventHandler()
 
     #load sequence file(s)
-    if argDict['loadSeq'] is not None:
+    if useDefault:  #no relevant args specified, so run default mode (play a scene)
+        fileName = seqMgr.SEQ_SCENE0
+        logging.info("Loading sequence file: " + fileName)
+        seqMgr.currSeq=Sequence(fileName)  
+        seqMgr.storeSeq(0)  #store into mem slot 0 
+    elif argDict['loadSeq'] is not None:
         fileArgs = argDict['loadSeq']
         for fileArg in fileArgs: #loadSeq arg is a list (append option) because we want to allow multiple instances of it
             if fileArg.find(',') == -1: #just specified a file
@@ -763,21 +804,11 @@ def main(argDict):
                 slotNum = 0
             else:   #specified a file and slot number to store it in
                 (fileName, slotNum) = fileArg.split(',')
-            #fileName = savedSequenceDir + fileName  ---- don't prepend a dir, let user specify
+            #fileName = savedSequenceDir + fileName  #NO - don't prepend a dir, let user specify
             logging.info("Loading sequence file: " + fileName)
-            seqMgr.currSeq=Sequence(fileName)  #means the last one specified will be played
+            seqMgr.currSeq=Sequence(fileName)  #means if slots not individually specified, the last one specified will be played
             seqMgr.storeSeq(int(slotNum))  #store into mem slot  
 
-    logging.info("About to start Pygame")
-    #init everything
-    pySetup.initPygame()
-    logging.info("After init of Pygame")
-    sampMgr.findSamples()
-    display.initDisplay()
-    seqMgr.updateDisplay()
-    seqMgr.start()
-
-    keyHandler = KeyEventHandler()
 
     #Start pygame event loop (keyboard input) - pygame docs say it is important this is in main thread
     while True:
@@ -803,7 +834,7 @@ if __name__ == "__main__":
     parser.add_argument("--numBeats",  type=int, help="# Beats per Measure")
     parser.add_argument("--numSubBeats",  type=int, help="# Subbeats within beats")
     parser.add_argument("--swingTime", action='store_true', help="Use swing time")
-    parser.add_argument("--loadSeq", action='append', help="load a json encoded sequence file from storedSequences. If only filename specified, will load into slot 0, can also specify slot vis --loadSeq=<fileName>,<slotNum>") 
+    parser.add_argument("--loadSeq", action='append', help="load a json encoded sequence file from storedSequences. If only filename specified, will load into slot 0, can also specify slot vis --loadSeq=<fileName>,<slotNum>.  Also supports multiple files loaded to multiple slots (tested??)") 
     parser.add_argument("--logLevel", help="Set the logging level")
     args = parser.parse_args()
     argDict = vars(args)
