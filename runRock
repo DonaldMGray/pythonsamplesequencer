@@ -1,0 +1,2 @@
+sudo python3 code/sampleSeq.py --bpm=200 --numMeasures=2 --numBeats=4 --numSubBeats=2 --loadSeq savedSequences/rock.json
+
